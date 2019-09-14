@@ -1,23 +1,11 @@
 /*
- *
-
-TODO
-setup to alias bare-import to version @ redirect
-symlink dirs,
-report out the module for the importable path './thing/there/name.js' and './thing@version/there/name.js'
-build queue of imports to complete, process them to the local path (stat and if missing get save to target file stream)
-when find a bare-import go get it;
-collect errors and report them out at the end;
-
-
-
 hit https://unpkg.com/module
 => 301/302
 => 200 https://..../module@version/file.extension
 import from "lit-html" => "./lit-html@version/file.extension"
 import from "lit-html/anything" => "./lit-html@version/anything"
 also import("lit-html")
-all other imports untouched, just retrieve
+?all other imports untouched, just retrieve
 always quoted 'module' or "module"
 
 module
@@ -27,30 +15,8 @@ htt..../module@version
 
 handle any redirect
 save the response to a file with appropriate name
-
-TODO
-for each import
-
-	* first interpolate/translate a bare import, in such a way it can be resolved by all that follow
-	* build an index of the bare version with a reference to the resolved fs-dest for that translated bare import (file when alone or dir when that)
-	* go get that file content and write it to the fs-dest
-	=> TODO rewrite the RESOLVED bare import!
-
-	module@version => full path... && mdule is SAME
-	module => module@version => full path to dir AND file
-	full path ... => module AND module@version all resolve to SAME UNLESS OTHERWISE DEFINED (allow multiple versions)
-
-TODO add ?module flag
-
-Promise.all(fs-prepare-dest, http/fs-read)
-	write result to dest
-
-analyze content
-	=> find import
-	=> pass found for translation
-
- *
  * */
+
 const https = require('https');
 const fs = require('fs');
 const pafs = require('path');
@@ -59,30 +25,28 @@ const {URL} = require('url');
 const options = {
 	url: ''
 	, origin: 'https://unpkg.com'
-	, requests: {}
 	, dest: './unpkg-src'
-	, default: 'unpkg-import.js'
-	, alias: {
-		'/bare-module': './bare-module/path/to/file.js'
-	}
+	, default: 'unpkg.js'
 	, max: 5
+};
+
+const patterns = {
 	, importPattern: /(\bimport\b[^;]*?[\'\"])([^\'\"]+)/g
 	// http:// or ./path
 	, importPatternStart: /^(?:[a-z]{2,10}:\/\/|\.+\/)/i
 	// anything/file.extension
 	, importPatternEnd: /\/[^\/]+\.[a-z]+$/i
 	, importPatternUrl: /^[a-z]{2,}:\/\/[^\/]{3,}/i
+	, namePattern: /^(?:[a-z]+:\/\/[^\/]+)?\/?([^\/]+)(?:\/[^\/]*)?$/i
 	// import "bare-module" => import "./bare-module/unpkg-import.js"
 	// symlink (later) ./bare-module/unpkg-import.js => ./bare-module@version/real-file.js
 	// import "bare-module/path/to/any" => import "./bare-module/path/to/any"
 	// symlink (later) ./bare-module/ => ./bare-module@version/
-	//
-	// TODO static aliases before running
 };
 
 process.argv.reduce(function configure(options, arg, i){
 	// allow name=value or name:value
-	var parts = arg.match(/^-*([a-z][a-z0-9]+)(?:[=:]?(.+))?/i);
+	var parts = arg.match(/^-*(?:unpkg-?)?([a-z][a-z0-9]+)(?:[=:]?(.+))?/i);
 	if(parts){
 		let name = parts[1];
 		let value = (parts[2] || '').trim();
@@ -90,15 +54,23 @@ process.argv.reduce(function configure(options, arg, i){
 	}
 	return options;
 }, options);
-console.log(options);
+
+console.log(`unpkg usage like:
+$ node ./unpkg.js url='https://unpkg.com/lit-element'`);
+process.chdir(pafs.resolve(options.dest))
+console.log(`unpkg with options in "${ process.cwd() }"
+overwrite any option with pattern "name='value'" or "unpkg-name=value"
+`, options
+);
+
+Object.assign(options, patterns);
 
 function exiting(type){
 	// this === process
-	console.log('TODO cleanup work', type, this===process);
+	console.log('unpkg finished with ', type, this===process);
 	this.exit(0);
 }
 
-const registry = {};
 /* SIGINT Control+C (not-windows only); SIGHUP terminal closed (all); 
 https://nodejs.org/api/process.html#process_process_exit_code
  * */
@@ -112,21 +84,18 @@ process.on('beforeExit',function beforeExit(...args){
 const requests = Object.defineProperties({}, {
 	pending: {value:new Set()}
 	, active: {value:new Set()}
+	, queue: {value: new Set(), writable: true}
 	, all: {value: {}}
 	, imports: {value: {}}
+	, alias: {value: []}
 });
 
-class BareImport{
-	constructor(url, conf=options){
-		this.url = new URL(url, conf.origin);
-		// http://domain/bare-import/any /bare-import/any bare-import
-		this.name = url.replace(/^(?:[a-z]+:\/\/[^\/]+)?\/?([^\/]+)(?:\/[^\/]*)?$/i,'$1');
-		if(requests.imports[ this.name ]) return requests.imports[ this.name ];
-		requests.imports[ this.name ] = this;
-		this.alias = [];
+class Importer{
+	constructor(){
+		this.tick = this.tick.bind(this);
 		this.importable = this.importable.bind(this);
-		this.config = conf;
 	}
+	// setup for writing to destination
 	fs(path){
 		// translate url patterns to file-system
 		// ./the/dir/file => ./the/dir
@@ -139,82 +108,86 @@ class BareImport{
 			});
 		});
 	}
+	// TODO replace with path utils
 	path(base, path){
 		return `${ base }/${ path }`.replace(/\/{2,}/g, '/');
 	}
 	/*
-	 * setup for figuring out the import
-	 * hand-off to being getting files
-	 * when done alias bare import
 		alias './bare-module' to './bare-module@version'
 		alias './bare-module/alias.js' to './bare-module@version/real-file.js'
 
 		allowing these transformations and resolution of them:
 		import 'bare-module' => import './bare-module/alias.js'
 		import 'bare-module@version' => import './bare-module@version/alias.js'
-		all this will be imported relative to the target destination, so all paths relative to ./
+		TODO all this will be imported relative to the target destination, so all paths relative to ./
 		then imported separately from external scripts, all resolving to 'real-file.js'
 	 */
-	resolve(){
-		// setup Promise.all and start the process...
-debugger;
-		return this.next(this.url)
+	resolve(href){
+		var url = new URL(href, options.origin);
+		return this.queue(url)
+			.then(this.tick.bind(this))
 			.then((res)=>{
-console.log(this.name, 'finish with symlinks');
-				var dest = this.config.dest;
-				var target = this.path(dest, this.url.pathname);
-				var dir = target.replace(/\/[^\/]+$/,'');
-console.log(target, requests);
-debugger;
-	//			fs.symlink(pafs.resolve( dir ), pafs.resolve(  ), this.error);
-	//			fs.symlink('TODO', this.url.pathname, this.error);
+				requests.alias.forEach((it)=>{
+					var src = it[0], dest = it[1];
+					src = this.path('.', src + (/\.js/i.test(dest) ? ('/' + options.default):''));
+					dest = this.path('.', dest);
+					console.log(`alias: ${ src } to "${ dest }"`);
+					fs.symlink(pafs.resolve(options.dest, dest), pafs.resolve(options.dest, src), (err)=>{
+						if(err) console.error(err);
+					});
+				});
 			});
 	}
-	// for each url setup a req until the max
-	// for the remaining queue for later
-	// when those resolve, do the next set, pass the urls in
-	next(...urls){
-		var url, req;
-		while(url = urls.shift()){
-			requests.pending.add(url);
-		};
-		var list = Array.from(requests.active), next = (res)=>{
-			console.log('next(?)', res.req.path, requests);
-debugger;
-
-		};
-		while(req = list.shift()){
-			if(req.status) requests.active.delete(req);
-		};
+	queue(url){
+		var req, added = [], finish;
+		if(url) requests.pending.add(url), req, added = [];
 		while(requests.pending.size && requests.active.size < options.max){
 			url = requests.pending.values().next().value;
 			requests.pending.delete(url);
+			req = this.request(url);
+			finish = this.next.bind(this, url);
+			req
+				.then( finish )
+				.catch((err)=>{ this.error(err); finish(); })
+			;
+			requests.queue.add(req);
 			requests.active.add(url);
-			req = this.request(url).then(next);
-			list.push(req);
+			added.push(url);
 		};
-debugger;
-		return Promise.all(list).then((all)=>{
-			console.warn('FINISHED',list.length, urls, all);
-			console.warn('pending>',requests.pending.size, 'active>',requests.active.size);
-
-			var res;
-			while(res = all.shift()){
-				requests.active.delete( requests.all[ res.req.path ] );
-			}
-debugger;
-			return requests.pending.size ? this.next() : '~done~';
-		});
+		return Promise.resolve(added);
 	}
-	/* responsibility: setup a request, response handling, return promise that resolves correctly */
+	tick(){
+		// process the next set and reset
+		var list = Array.from(requests.queue);
+		requests.queue = new Set();
+		console.log(`tick(list.length})`, list);
+		return Promise.all(list)
+		.then((done)=>{
+			var i = 0, res;
+			console.log(`tick(resolved:${ done.length })`, done.length, 'pending/active', requests.pending.size, requests.active.size, requests.queue.size, requests);
+			while(res = done[i++]){
+				console.log('DONE>', res.req.path, res.req.url.href);
+			}
+			return requests.queue.size ? this.tick() : Object.entries(requests.all);
+		})
+		.catch((err)=>{
+			this.error(err);
+			return this.tick();
+		})
+		;
+	}
+	next(url){
+		requests.active.delete(url);
+		this.queue();
+		return url;
+	}
 	request(url){
 		var req = requests.all[ url.pathname ];
 		if(!req){
-//			url.searchParams.set('module','');
 			req = requests.all[ url.pathname ] = new Promise((resolve, reject)=>{
 				var req;
 				req = https.get(url, (res)=>{
-				// res.req.path === this.url.pathname
+				// res.req.path === url.pathname
 				// req.path returned here from https.get()
 					requests.all[ url.pathname ].status = 1;
 					requests.all[ url.pathname ].req = req;
@@ -226,37 +199,36 @@ debugger;
 					reject( this.error(err) );
 				})
 				;
+				req.url = url;
 			});
 		};
 		req.status = 0;
 		return req;
 	}
 	error(err, ...args){
-		console.warn(err, args);
-		console.error(err);
+		console.error(err, args);
 		return err;
 	}
 	response(res){
+		const url = res.req.url;
 		const statusCode = res.statusCode;
+		const config = options;
 		if(statusCode > 300 && statusCode <= 302){
 		// assuming these redirects only happen with top-level bare imports
-		// so we modify this.url based on this assumption
-			this.config.alias[ this.url.pathname ] = res.headers.location;
-			this.alias.push( this.url.pathname );
-			this.url.pathname = res.headers.location;
+		// so we modify url based on this assumption
+			requests.alias.push( [url.pathname, res.headers.location] );
+			url.pathname = res.headers.location;
 			// continue this active request, only in this case, into the next because we change its url directly
-			return this.request(this.url);
+			return this.request(url);
 		}
 		if(statusCode !== 200){
-			throw `${statusCode} for ${ this.url.href }`;
+			throw `${statusCode} for ${ url.href }`;
 		}
-		// ?NO TODO REMOVE? this.config.alias[ this.name ] = this.config.alias[ this.alias[ 0 ] ];
-		// res.req.path === this.url.pathname
-		// TODO REMOVE res.bareImport = this;
+		// res.req.path === url.pathname
 		res.pending = [];
 		res.on('data', this.write);
 		return Promise.all([
-			this.fs( this.path( this.config.dest, res.req.path ), res )
+			this.fs( this.path( './', res.req.path ), res )
 			,new Promise(function(resolve, reject){
 				res.on('end', resolve);
 				res.on('error', reject);
@@ -267,7 +239,7 @@ debugger;
 				stream.on('error', (err)=>{
 					reject( this.error(err) );
 				});
-				stream.write( this.rewriteImports( res.pending.join('') ) || '' );
+				stream.write( this.rewriteImports( res.pending.join(''), url  ) || '' );
 				resolve( res );
 			});
 		})
@@ -280,12 +252,13 @@ debugger;
 	//
 	// rewrite anything that isn't protocol://... or ./path
 	importable(all, importing, path){
-		var config = this.config;
+		var url, config = options;
 		if(!config.importPatternStart.test(path)){
 			if(!config.importPatternEnd.test(path)){
-				console.log(`~import bare "${path}"`);
-				new BareImport(this.config.origin + '/' + path).resolve();
+				url = new URL(config.origin + '/' + path, config.origin);
+				this.queue(url);
 				path = path + (path.endsWith('/') ? '':'/') + config.default;
+				console.log(`~import bare "${path}" from "${ url.href }"`);
 
 			}else{
 				// ignore, resolve by symlink later
@@ -294,36 +267,20 @@ debugger;
 			// fix prefix
 			path = './'+path;
 		}else if(!config.importPatternUrl.test(path)){
-			var url = new URL(this.url.href.replace(/^(.*\/)[^\/]*$/, '$1') + path, this.url.origin);
-			console.log(`~import "${path}" from "${url.href}"`);
-			this.next(url);
+			url = new URL(this.basePath + path, config.origin);
+			console.log(`~import "${path}" from "${ url.href }"`);
+			this.queue(url);
 		}
 		return importing + path;
 	}
-	rewriteImports(str){
-		return str.replace(this.config.importPattern, this.importable);
+	rewriteImports(str, url){
+		this.basePath = url.href.replace(/^(.*\/)[^\/]*$/, '$1');
+		console.log(`rewriteImports in "${url.href}"; relative to "${ this.basePath }"`);
+		return str.replace(options.importPattern, this.importable);
 	}
 	write(d){
-		// this === res; this.req === original request
-		// this.req.path === url.pathname can retrieve from config.requests[ url.pathname ]
 		this.pending.push( d.toString() );
 	}
 }
 
-/**
-TODO AFTER finishes
-AND after directories created
-THEN write contents info destination
-....
-when there is a target file, ensure the destination path exits (at some point, when though?)
-then write to that path in the local destination
-			const fromImport = importPaths(str);
-			if(fromImport){
-debugger;
-				console.log('imports:',fromImport.join(', '));
-			}
-		});
-	})
-*/
-
-new BareImport(options.url).resolve();
+new Importer().resolve(options.url);
