@@ -1,11 +1,25 @@
-/*
+/* unpkg.js
+ * script to pull down packages from unpkg.com for local use
+ * enabling offline independent development with minimal depenencies, cpu cycles, disk space and network traffic
+ *
+ * should resolve a package and its dependencies locally
+ * making it possible to import "./unpkg-src/the-package/unpkg.js"; without npm or building anything
+
+debugging:
+$ node --inspect-brk ./unpkg.js url='https://unpkg.com/lit-element'
+$ kill -9 \`ps aux | pcregrep -M -o1 '^[^\d]*(\d{1,}).*node.*unpkg\.js'\`
+
+TODO
+* fix url and path related cleanup using path and url related modules, whatever they are (for dir, '//' '..../' etc)
+* resolve full urls to local files
+
 hit https://unpkg.com/module
 => 301/302
 => 200 https://..../module@version/file.extension
 import from "lit-html" => "./lit-html@version/file.extension"
 import from "lit-html/anything" => "./lit-html@version/anything"
-also import("lit-html")
-?all other imports untouched, just retrieve
+import("lit-html")
+
 always quoted 'module' or "module"
 
 module
@@ -15,6 +29,7 @@ htt..../module@version
 
 handle any redirect
 save the response to a file with appropriate name
+
  * */
 
 const https = require('https');
@@ -31,7 +46,7 @@ const options = {
 };
 
 const patterns = {
-	, importPattern: /(\bimport\b[^;]*?[\'\"])([^\'\"]+)/g
+	importPattern: /(\bimport\b[^;]*?[\'\"])([^\'\"]+)/g
 	// http:// or ./path
 	, importPatternStart: /^(?:[a-z]{2,10}:\/\/|\.+\/)/i
 	// anything/file.extension
@@ -55,19 +70,20 @@ process.argv.reduce(function configure(options, arg, i){
 	return options;
 }, options);
 
-console.log(`unpkg usage like:
-$ node ./unpkg.js url='https://unpkg.com/lit-element'`);
-process.chdir(pafs.resolve(options.dest))
-console.log(`unpkg with options in "${ process.cwd() }"
+console.log(`
+unpkg usage like:
+$ node ./unpkg.js url='https://unpkg.com/lit-element'
 overwrite any option with pattern "name='value'" or "unpkg-name=value"
-`, options
-);
+
+options: ${ Object.entries(options).map(it=>{ return `${it[0]}='${it[1]}'` }).join(', ') }
+
+`, options);
 
 Object.assign(options, patterns);
 
 function exiting(type){
 	// this === process
-	console.log('unpkg finished with ', type, this===process);
+	console.log(`unpkg finished with status:${type}`);
 	this.exit(0);
 }
 
@@ -96,7 +112,7 @@ class Importer{
 		this.importable = this.importable.bind(this);
 	}
 	// setup for writing to destination
-	fs(path){
+	fs(path, ){
 		// translate url patterns to file-system
 		// ./the/dir/file => ./the/dir
 		return new Promise((resolve, reject)=>{
@@ -108,7 +124,7 @@ class Importer{
 			});
 		});
 	}
-	// TODO replace with path utils
+	// TODO replace with path or url utils?
 	path(base, path){
 		return `${ base }/${ path }`.replace(/\/{2,}/g, '/');
 	}
@@ -127,15 +143,25 @@ class Importer{
 		return this.queue(url)
 			.then(this.tick.bind(this))
 			.then((res)=>{
+				var list = [];
 				requests.alias.forEach((it)=>{
-					var src = it[0], dest = it[1];
-					src = this.path('.', src + (/\.js/i.test(dest) ? ('/' + options.default):''));
-					dest = this.path('.', dest);
+					var src = '.'+it[0], dest = '.'+it[1], isFile = /\.js/i.test(dest);
 					console.log(`alias: ${ src } to "${ dest }"`);
-					fs.symlink(pafs.resolve(options.dest, dest), pafs.resolve(options.dest, src), (err)=>{
+					if(isFile) list.push(src, dest);
+					src = pafs.relative(pafs.resolve('.'), pafs.resolve(src + (isFile ? ('/'+options.default) : '')));
+					dest = pafs.relative(isFile ? pafs.dirname(dest) : pafs.resolve('.'), pafs.resolve(dest));
+debugger
+					fs.symlink(dest, src, (err)=>{
 						if(err) console.error(err);
 					});
 				});
+				console.log(`
+finished with imports:
+
+${ list.map(v=>{ return `import "./${ pafs.relative('..', v) }";` }).join('\n') }
+
+...
+`);
 			});
 	}
 	queue(url){
@@ -160,13 +186,13 @@ class Importer{
 		// process the next set and reset
 		var list = Array.from(requests.queue);
 		requests.queue = new Set();
-		console.log(`tick(list.length})`, list);
+		console.log(`tick(next:${list.length})`);
 		return Promise.all(list)
 		.then((done)=>{
 			var i = 0, res;
-			console.log(`tick(resolved:${ done.length })`, done.length, 'pending/active', requests.pending.size, requests.active.size, requests.queue.size, requests);
+			console.log(`tick(done:${ done.length }) pending:${requests.pending.size} active:${requests.active.size} queue:${requests.queue.size}`);
 			while(res = done[i++]){
-				console.log('DONE>', res.req.path, res.req.url.href);
+				console.log(`have: "${res.req.path}" from "${res.req.url.href}"`);
 			}
 			return requests.queue.size ? this.tick() : Object.entries(requests.all);
 		})
@@ -275,7 +301,7 @@ class Importer{
 	}
 	rewriteImports(str, url){
 		this.basePath = url.href.replace(/^(.*\/)[^\/]*$/, '$1');
-		console.log(`rewriteImports in "${url.href}"; relative to "${ this.basePath }"`);
+		console.log(`~importing in "${url.href}" relative to "${ this.basePath }"`);
 		return str.replace(options.importPattern, this.importable);
 	}
 	write(d){
@@ -283,4 +309,13 @@ class Importer{
 	}
 }
 
-new Importer().resolve(options.url);
+fs.mkdir(pafs.resolve(options.dest), {recursive: true}, (err)=>{
+	if(err) return Importer.error(err);
+
+	process.chdir(pafs.resolve(options.dest))
+console.log(`
+unpkg working in "${ process.cwd() }"
+...`
+);
+	new Importer().resolve(options.url);
+});
