@@ -46,7 +46,7 @@ const options = {
 };
 
 const patterns = {
-	importPattern: /(\bimport\b[^;]*?[\'\"])([^\'\"]+)/g
+	importPattern: /(\b(?:import|export)\b[^;]*?[\'\"])([^\'\"]+)/g
 	// http:// or ./path
 	, importPatternStart: /^(?:[a-z]{2,10}:\/\/|\.+\/)/i
 	// anything/file.extension
@@ -146,10 +146,10 @@ class Importer{
 				var list = [];
 				requests.alias.forEach((it)=>{
 					var src = '.'+it[0], dest = '.'+it[1], isFile = /\.js/i.test(dest);
-					console.log(`alias: ${ src } to "${ dest }"`);
-					if(isFile) list.push(src, dest);
 					src = pafs.relative(pafs.resolve('.'), pafs.resolve(src + (isFile ? ('/'+options.default) : '')));
 					dest = pafs.relative(isFile ? pafs.dirname(dest) : pafs.resolve('.'), pafs.resolve(dest));
+					console.log(`alias: ${ src } to "${ dest }"`);
+					if(isFile) list.push(src);
 					fs.symlink(dest, src, (err)=>{
 						if(err) console.error(err);
 					});
@@ -281,20 +281,20 @@ ${ list.map(v=>{ return `import "./${ pafs.relative('..', v) }";` }).join('\n') 
 		if(!config.importPatternStart.test(path)){
 			if(!config.importPatternEnd.test(path)){
 				url = new URL(config.origin + '/' + path, config.origin);
-				this.queue(url);
+				if(importing.startsWith('import')) this.queue(url);
 				path = path + (path.endsWith('/') ? '':'/') + config.default;
-				console.log(`~import bare "${path}" from "${ url.href }"`);
+				console.log(`~bare ${importing} "${path}" from "${ url.href }"`);
 
 			}else{
 				// ignore, resolve by symlink later
-				console.log(`~import rewrote "${path}"`);
+				console.log(`~rewrote ${importing} "${path}"`);
 			};
 			// fix prefix
 			path = './'+path;
 		}else if(!config.importPatternUrl.test(path)){
 			url = new URL(this.basePath + path, config.origin);
-			console.log(`~import "${path}" from "${ url.href }"`);
-			this.queue(url);
+			console.log(`~${importing} "${path}" from "${ url.href }"`);
+			if(importing.startsWith('import')) this.queue(url);
 		}
 		return importing + path;
 	}
