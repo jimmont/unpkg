@@ -305,28 +305,31 @@ ${ list.map(v=>{ return `import "./${ pafs.relative('..', v) }";` }).join('\n') 
 	importable(all, importing, path){
 		var url, config = options;
 		if(!config.importPatternStart.test(path)){
+			// relative to the module importing it
+			let relativePath = pafs.posix.relative(this.parsed.dir, '/'+path);
+			url = new URL(config.origin + '/' + path, config.origin);
 			if(!config.importPatternEnd.test(path)){
-				url = new URL(config.origin + '/' + path, config.origin);
-				if(importing.startsWith('import')) this.queue(url);
-				path = path + (path.endsWith('/') ? '':'/') + config.default;
-				console.log(`~bare ${importing} "${path}" from "${ url.href }"`);
-
+				// "lit-html"
+				path = relativePath + (path.endsWith('/') ? '':'/') + config.default;
 			}else{
-				// ignore, resolve by symlink later
-				console.log(`~rewrote ${importing} "${path}"`);
+				// "lit-html/lib/shady-render.js"
+				path = relativePath;
 			};
+			console.log(`~bare ${importing} "${path}" from "${ url.href }"`);
 			// fix prefix
-			path = './'+path;
+			if(!path.startsWith('.') && !path.startsWith('/')) path = './'+path;
 		}else if(!config.importPatternUrl.test(path)){
-			url = new URL(this.basePath + path, config.origin);
+			url = new URL(this.parsed.dir + '/' + path, config.origin);
 			console.log(`~${importing} "${path}" from "${ url.href }"`);
-			if(importing.startsWith('import')) this.queue(url);
 		}
+		if(importing.startsWith('import')) this.queue(url);
+
 		return importing + path;
 	}
 	rewriteImports(str, url){
-		this.basePath = url.href.replace(/^(.*\/)[^\/]*$/, '$1');
-		console.log(`~importing in "${url.href}" relative to "${ this.basePath }"`);
+		this.url = url;
+		this.parsed = pafs.posix.parse(url.pathname);
+		console.log(`~importing in "${url.href}" relative to "${ this.parsed.dir }"`);
 		return str.replace(options.importPattern, this.importable);
 	}
 	write(d){
