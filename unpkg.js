@@ -316,5 +316,6 @@ console.log(`
 unpkg working in "${ process.cwd() }"
 ...`
 );
-	new Importer().resolve(options.url);
+	if(/\w+/i.test(options.url)) new Importer().resolve(options.url);
+	else process.exit(0);
 });
