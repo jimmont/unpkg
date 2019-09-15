@@ -5,8 +5,9 @@ see https://jimmont.github.io/unpkg/
 
 synopsis
 
-* get the script:
+* get the script either with curl or wget:
 `wget 'https://jimmont.github.io/unpkg/unpkg.js'`
+`curl -O 'https://jimmont.github.io/unpkg/unpkg.js'`
 
 * run it to see the options:
 `node ./unpkg.js`
