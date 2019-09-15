@@ -1,4 +1,4 @@
-/* unpkg.js
+/* unpkg.js https://github.com/jimmont/unpkg
 reduce effort required to use JavaScript imports by importing locally from unpkg.com
 
 see https://jimmont.github.io/unpkg/
@@ -16,6 +16,13 @@ synopsis
 
 * import lit-element into working JavaScript:
 `import * from "./unpkg-src/lit-element/unpkg.js"`
+
+...
+
+Be free to focus on work rather than build processes.
+
+Hire me.
+
 
  * script to pull down packages from unpkg.com for local use
  * enabling offline independent development with minimal depenencies, cpu cycles, disk space and network traffic
