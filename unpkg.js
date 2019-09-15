@@ -150,7 +150,6 @@ class Importer{
 					if(isFile) list.push(src, dest);
 					src = pafs.relative(pafs.resolve('.'), pafs.resolve(src + (isFile ? ('/'+options.default) : '')));
 					dest = pafs.relative(isFile ? pafs.dirname(dest) : pafs.resolve('.'), pafs.resolve(dest));
-debugger
 					fs.symlink(dest, src, (err)=>{
 						if(err) console.error(err);
 					});
