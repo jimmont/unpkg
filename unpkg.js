@@ -16,7 +16,7 @@ synopsis
 `node ./unpkg.js url='https://unpkg.com/lit-element'`
 
 * import lit-element into working JavaScript:
-`import * from "./unpkg-src/lit-element/unpkg.js"`
+`import * as stuff from "./unpkg-src/lit-element/unpkg.js"`
 
 ...
 
