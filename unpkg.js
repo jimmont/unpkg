@@ -181,6 +181,7 @@ class Importer{
 					src = pafs.relative(pafs.resolve('.'), pafs.resolve(src + (isFile ? ('/'+options.default) : '')));
 					dest = pafs.relative(isFile ? pafs.dirname(dest) : pafs.resolve('.'), pafs.resolve(dest));
 					console.log(`alias: ${ src } to "${ dest }"`);
+					// TODO fix generic alias in list for output
 					if(isFile) list.push(src);
 					fs.symlink(dest, src, (err)=>{
 						if(err) console.error(err);
@@ -273,6 +274,7 @@ ${ list.map(v=>{ return `import "./${ pafs.relative('..', v) }";` }).join('\n') 
 		if(statusCode > 300 && statusCode <= 302){
 		// assuming these redirects only happen with top-level bare imports
 		// so we modify url based on this assumption
+// TODO fix weird aliasing
 			requests.alias.push( [url.pathname, res.headers.location] );
 			url.pathname = res.headers.location;
 			// continue this active request, only in this case, into the next because we change its url directly
