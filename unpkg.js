@@ -58,6 +58,7 @@ save the response to a file with appropriate name
 
  * */
 
+const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const pafs = require('path');
@@ -244,7 +245,7 @@ ${ list.map(v=>{ return `import "./${ pafs.relative('..', v) }";` }).join('\n') 
 		if(!req){
 			req = requests.all[ url.pathname ] = new Promise((resolve, reject)=>{
 				var req;
-				req = https.get(url, (res)=>{
+				req = (/^http:/.test(url) ? http : https).get(url, (res)=>{
 				// res.req.path === url.pathname
 				// req.path returned here from https.get()
 					requests.all[ url.pathname ].status = 1;
